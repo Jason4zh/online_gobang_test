@@ -214,6 +214,16 @@
             cursor: pointer;
         }
         
+        .highlight-room {
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
         @media (max-width: 600px) {
             .goban {
                 width: 340px;
@@ -480,16 +490,6 @@
                 connectionStatusElement.textContent = "已连接";
                 connectionStatusElement.style.color = "#4CAF50";
                 statusBar.textContent = "已连接到游戏服务器";
-                
-                // 加入房间
-                if (gameState.roomId) {
-                    const joinMsg = {
-                        type: 'join',
-                        roomId: gameState.roomId,
-                        playerRole: gameState.playerRole
-                    };
-                    socket.send(JSON.stringify(joinMsg));
-                }
             };
             
             socket.onmessage = (event) => {
@@ -503,14 +503,8 @@
                         case 'move':
                             handleOpponentMove(message.x, message.y);
                             break;
-                        case 'join':
-                            handlePlayerJoin(message.playerRole);
-                            break;
                         case 'win':
                             handleWinMessage(message.winner);
-                            break;
-                        case 'room_created':
-                            handleRoomCreated(message.roomId);
                             break;
                         case 'player_joined':
                             handlePlayerJoined(message.playerRole);
@@ -542,7 +536,10 @@
         function handleRoomCreated(roomId) {
             gameState.roomId = roomId;
             roomIdElement.textContent = roomId;
-            statusBar.textContent = "房间已创建，请分享房间号给朋友";
+            roomIdElement.classList.add('highlight-room');
+            setTimeout(() => {
+                roomIdElement.classList.remove('highlight-room');
+            }, 3000);
         }
         
         // 处理玩家加入成功
@@ -620,26 +617,14 @@
             socket.send(JSON.stringify(message));
         }
         
-        // 发送创建房间消息
-        function sendCreateRoomMessage() {
+        // 发送玩家加入消息
+        function sendPlayerJoinedMessage() {
             if (!socket || socket.readyState !== WebSocket.OPEN) return;
             
             const message = {
-                type: 'create_room',
-                playerRole: 'black'
-            };
-            
-            socket.send(JSON.stringify(message));
-        }
-        
-        // 发送加入房间消息
-        function sendJoinRoomMessage() {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            
-            const message = {
-                type: 'join_room',
+                type: 'player_joined',
                 roomId: gameState.roomId,
-                playerRole: 'white'
+                playerRole: gameState.playerRole
             };
             
             socket.send(JSON.stringify(message));
@@ -658,23 +643,18 @@
         
         // 创建房间
         function createRoom() {
+            // 生成随机房间号（4位数字）
+            const roomId = Math.floor(1000 + Math.random() * 9000).toString();
+            
             gameState.playerRole = 'black';
             playerRoleElement.textContent = "黑方";
             
+            // 处理房间创建
+            handleRoomCreated(roomId);
+            
             connectToWebSocket();
             
-            // 发送创建房间请求
-            setTimeout(() => {
-                if (socket.readyState === WebSocket.OPEN) {
-                    sendCreateRoomMessage();
-                } else {
-                    socket.addEventListener('open', () => {
-                        sendCreateRoomMessage();
-                    });
-                }
-            }, 100);
-            
-            statusBar.textContent = "正在创建房间...";
+            statusBar.textContent = "房间已创建，请分享房间号给朋友";
             createRoomBtn.disabled = true;
             joinRoomBtn.disabled = true;
             roomInput.disabled = true;
@@ -707,16 +687,15 @@
             // 初始化棋盘
             initBoard();
             
-            // 发送加入房间请求
+            // 模拟加入成功
             setTimeout(() => {
-                if (socket.readyState === WebSocket.OPEN) {
-                    sendJoinRoomMessage();
-                } else {
-                    socket.addEventListener('open', () => {
-                        sendJoinRoomMessage();
-                    });
-                }
-            }, 100);
+                gameState.gameStarted = true;
+                statusBar.textContent = "游戏开始！你是白方，等待黑方落子";
+                updateTurnIndicator();
+                
+                // 通知房间创建者（黑方）已有玩家加入
+                sendPlayerJoinedMessage();
+            }, 1000);
         }
         
         // 事件监听
