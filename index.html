@@ -148,10 +148,6 @@
             transition: transform 0.2s;
         }
         
-        .stone:hover {
-            transform: scale(1.1);
-        }
-        
         .black-stone {
             background: radial-gradient(circle at 30% 30%, #666, #000);
         }
@@ -204,7 +200,6 @@
             line-height: 1.4;
         }
         
-        /* 隐藏半透明棋子 */
         .grid-point {
             position: absolute;
             width: 30px;
@@ -289,7 +284,6 @@
         // 游戏配置
         const GRID_SIZE = 15; // 15x15 棋盘
         const CELL_SIZE = 40; // 棋盘格子大小
-        const COLOR = ["black", "white"];
         const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]; // 检查方向
         
         // 游戏状态
@@ -300,12 +294,8 @@
             gameStarted: false,
             gameOver: false,
             boardState: Array(GRID_SIZE).fill().map(() => Array(GRID_SIZE).fill(null)),
-            players: {}
+            lastMoveTimestamp: 0
         };
-        
-        // 使用更可靠的WebSocket服务器
-        const WS_SERVER = "wss://gobang-websocket-server.onrender.com";
-        let socket = null;
         
         // DOM元素
         const goban = document.getElementById('goban');
@@ -354,7 +344,7 @@
                 goban.appendChild(star);
             });
             
-            // 创建落子点 - 使用透明点击区域
+            // 创建透明点击区域
             for (let y = 0; y < GRID_SIZE; y++) {
                 for (let x = 0; x < GRID_SIZE; x++) {
                     const gridPoint = document.createElement('div');
@@ -379,6 +369,9 @@
                             statusBar.textContent = "现在不是你的回合，请等待对方落子";
                             return;
                         }
+                        
+                        const x = parseInt(gridPoint.dataset.x);
+                        const y = parseInt(gridPoint.dataset.y);
                         
                         if (gameState.boardState[y][x] !== null) {
                             statusBar.textContent = "该位置已有棋子，请选择其他位置";
@@ -468,102 +461,144 @@
             return null;
         }
         
-        // 连接到WebSocket服务器
-        function connectToWebSocket() {
-            if (socket && socket.readyState === WebSocket.OPEN) {
+        // 创建房间
+        function createRoom() {
+            const roomId = Math.floor(1000 + Math.random() * 9000).toString();
+            gameState.roomId = roomId;
+            gameState.playerRole = 'black';
+            
+            roomIdElement.textContent = roomId;
+            playerRoleElement.textContent = "黑方";
+            
+            connectionStatusElement.textContent = "已连接";
+            connectionStatusElement.style.color = "#4CAF50";
+            
+            statusBar.textContent = "房间已创建，请分享房间号给朋友";
+            createRoomBtn.disabled = true;
+            joinRoomBtn.disabled = true;
+            roomInput.disabled = true;
+            
+            // 初始化棋盘
+            initBoard();
+            
+            // 初始化连接状态
+            gameState.gameStarted = true;
+            turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">你的回合</span>（黑方）`;
+            
+            // 存储房间信息
+            localStorage.setItem('gobang_room', JSON.stringify({
+                roomId: roomId,
+                playerRole: 'black'
+            }));
+        }
+        
+        // 加入房间
+        function joinRoom() {
+            const roomId = roomInput.value.trim();
+            if (!roomId) {
+                statusBar.textContent = "请输入房间号";
                 return;
             }
             
-            socket = new WebSocket(WS_SERVER);
-            
-            socket.onopen = () => {
-                connectionStatusElement.textContent = "已连接";
-                connectionStatusElement.style.color = "#4CAF50";
-                statusBar.textContent = "已连接到游戏服务器";
-                
-                // 加入房间
-                if (gameState.roomId) {
-                    const joinMsg = {
-                        type: 'join',
-                        roomId: gameState.roomId,
-                        playerRole: gameState.playerRole
-                    };
-                    socket.send(JSON.stringify(joinMsg));
-                }
-            };
-            
-            socket.onmessage = (event) => {
-                try {
-                    const message = JSON.parse(event.data);
-                    
-                    // 只处理当前房间的消息
-                    if (message.roomId !== gameState.roomId) return;
-                    
-                    switch (message.type) {
-                        case 'move':
-                            handleOpponentMove(message.x, message.y);
-                            break;
-                        case 'join':
-                            handlePlayerJoin(message.playerRole);
-                            break;
-                        case 'win':
-                            handleWinMessage(message.winner);
-                            break;
-                        case 'room_created':
-                            handleRoomCreated(message.roomId);
-                            break;
-                        case 'player_joined':
-                            handlePlayerJoined(message.playerRole);
-                            break;
-                        case 'error':
-                            handleErrorMessage(message.message);
-                            break;
-                    }
-                } catch (e) {
-                    console.error("解析消息错误:", e);
-                }
-            };
-            
-            socket.onerror = (error) => {
-                console.error("WebSocket错误:", error);
-                connectionStatusElement.textContent = "连接错误";
-                connectionStatusElement.style.color = "#FF5722";
-                statusBar.textContent = "服务器连接错误，请重试";
-            };
-            
-            socket.onclose = () => {
-                connectionStatusElement.textContent = "已断开";
-                connectionStatusElement.style.color = "#F44336";
-                statusBar.textContent = "服务器连接已断开，请重新连接";
-            };
-        }
-        
-        // 处理房间创建成功
-        function handleRoomCreated(roomId) {
-            gameState.roomId = roomId;
-            roomIdElement.textContent = roomId;
-            statusBar.textContent = "房间已创建，请分享房间号给朋友";
-        }
-        
-        // 处理玩家加入成功
-        function handlePlayerJoined(playerRole) {
-            gameState.gameStarted = true;
-            playerRoleElement.textContent = playerRole === 'black' ? "黑方" : "白方";
-            
-            if (playerRole === 'black') {
-                gameState.currentTurn = 'black';
-                statusBar.textContent = "游戏开始！你是黑方，请先落子";
-            } else {
-                gameState.currentTurn = 'black';
-                statusBar.textContent = "游戏开始！你是白方，等待黑方落子";
+            if (roomId.length !== 4 || isNaN(roomId)) {
+                statusBar.textContent = "房间号必须是4位数字";
+                return;
             }
             
-            updateTurnIndicator();
+            gameState.roomId = roomId;
+            gameState.playerRole = 'white';
+            
+            roomIdElement.textContent = roomId;
+            playerRoleElement.textContent = "白方";
+            
+            connectionStatusElement.textContent = "已连接";
+            connectionStatusElement.style.color = "#4CAF50";
+            
+            statusBar.textContent = "已加入房间，等待游戏开始";
+            createRoomBtn.disabled = true;
+            joinRoomBtn.disabled = true;
+            roomInput.disabled = true;
+            
+            // 初始化棋盘
+            initBoard();
+            
+            // 初始化连接状态
+            gameState.gameStarted = true;
+            turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">对方回合</span>（黑方）`;
+            
+            // 存储房间信息
+            localStorage.setItem('gobang_room', JSON.stringify({
+                roomId: roomId,
+                playerRole: 'white'
+            }));
         }
         
-        // 处理错误消息
-        function handleErrorMessage(msg) {
-            statusBar.textContent = msg;
+        // 发送落子消息（使用localStorage实现）
+        function sendMoveMessage(x, y) {
+            const moveData = {
+                type: 'move',
+                roomId: gameState.roomId,
+                x: x,
+                y: y,
+                playerRole: gameState.playerRole,
+                timestamp: Date.now()
+            };
+            
+            // 存储消息
+            localStorage.setItem(`gobang_move_${gameState.roomId}`, JSON.stringify(moveData));
+        }
+        
+        // 发送胜利消息
+        function sendWinMessage(winner) {
+            const winData = {
+                type: 'win',
+                roomId: gameState.roomId,
+                winner: winner,
+                timestamp: Date.now()
+            };
+            
+            localStorage.setItem(`gobang_win_${gameState.roomId}`, JSON.stringify(winData));
+        }
+        
+        // 更新回合指示器
+        function updateTurnIndicator() {
+            if (gameState.gameOver) return;
+            
+            if (gameState.currentTurn === gameState.playerRole) {
+                turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">你的回合</span>（${gameState.playerRole === 'black' ? '黑方' : '白方'}）`;
+            } else {
+                turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">对方回合</span>（${gameState.playerRole === 'black' ? '白方' : '黑方'}）`;
+            }
+        }
+        
+        // 检查对方消息
+        function checkOpponentMove() {
+            if (!gameState.roomId || !gameState.gameStarted) return;
+            
+            // 检查落子消息
+            const moveData = localStorage.getItem(`gobang_move_${gameState.roomId}`);
+            if (moveData) {
+                const move = JSON.parse(moveData);
+                
+                // 确保是对方的消息且是新消息
+                if (move.playerRole !== gameState.playerRole && move.timestamp > gameState.lastMoveTimestamp) {
+                    gameState.lastMoveTimestamp = move.timestamp;
+                    
+                    // 处理对方落子
+                    handleOpponentMove(move.x, move.y);
+                }
+            }
+            
+            // 检查胜利消息
+            const winData = localStorage.getItem(`gobang_win_${gameState.roomId}`);
+            if (winData) {
+                const win = JSON.parse(winData);
+                
+                // 处理胜利消息
+                if (win.timestamp > gameState.lastMoveTimestamp) {
+                    handleWinMessage(win.winner);
+                }
+            }
         }
         
         // 处理对手落子
@@ -592,139 +627,49 @@
             statusBar.textContent = "游戏结束，请刷新页面重新开始";
         }
         
-        // 发送落子消息
-        function sendMoveMessage(x, y) {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            
-            const message = {
-                type: 'move',
-                roomId: gameState.roomId,
-                x: x,
-                y: y,
-                playerRole: gameState.playerRole
-            };
-            
-            socket.send(JSON.stringify(message));
-        }
-        
-        // 发送胜利消息
-        function sendWinMessage(winner) {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            
-            const message = {
-                type: 'win',
-                roomId: gameState.roomId,
-                winner: winner
-            };
-            
-            socket.send(JSON.stringify(message));
-        }
-        
-        // 发送创建房间消息
-        function sendCreateRoomMessage() {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            
-            const message = {
-                type: 'create_room',
-                playerRole: 'black'
-            };
-            
-            socket.send(JSON.stringify(message));
-        }
-        
-        // 发送加入房间消息
-        function sendJoinRoomMessage() {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            
-            const message = {
-                type: 'join_room',
-                roomId: gameState.roomId,
-                playerRole: 'white'
-            };
-            
-            socket.send(JSON.stringify(message));
-        }
-        
-        // 更新回合指示器
-        function updateTurnIndicator() {
-            if (gameState.gameOver) return;
-            
-            if (gameState.currentTurn === gameState.playerRole) {
-                turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">你的回合</span>（${gameState.playerRole === 'black' ? '黑方' : '白方'}）`;
-            } else {
-                turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">对方回合</span>（${gameState.playerRole === 'black' ? '白方' : '黑方'}）`;
-            }
-        }
-        
-        // 创建房间
-        function createRoom() {
-            gameState.playerRole = 'black';
-            playerRoleElement.textContent = "黑方";
-            
-            connectToWebSocket();
-            
-            // 发送创建房间请求
-            setTimeout(() => {
-                if (socket.readyState === WebSocket.OPEN) {
-                    sendCreateRoomMessage();
+        // 尝试恢复游戏状态
+        function restoreGameState() {
+            const savedRoom = localStorage.getItem('gobang_room');
+            if (savedRoom) {
+                const roomInfo = JSON.parse(savedRoom);
+                gameState.roomId = roomInfo.roomId;
+                gameState.playerRole = roomInfo.playerRole;
+                
+                roomIdElement.textContent = roomInfo.roomId;
+                playerRoleElement.textContent = roomInfo.playerRole === 'black' ? '黑方' : '白方';
+                
+                connectionStatusElement.textContent = "已连接";
+                connectionStatusElement.style.color = "#4CAF50";
+                
+                createRoomBtn.disabled = true;
+                joinRoomBtn.disabled = true;
+                roomInput.disabled = true;
+                
+                // 初始化棋盘
+                initBoard();
+                
+                gameState.gameStarted = true;
+                
+                if (gameState.playerRole === 'black') {
+                    turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">你的回合</span>（黑方）`;
                 } else {
-                    socket.addEventListener('open', () => {
-                        sendCreateRoomMessage();
-                    });
+                    turnIndicator.innerHTML = `现在是<span style="color:#ffcc00; font-weight:bold">对方回合</span>（黑方）`;
                 }
-            }, 100);
-            
-            statusBar.textContent = "正在创建房间...";
-            createRoomBtn.disabled = true;
-            joinRoomBtn.disabled = true;
-            roomInput.disabled = true;
-            
-            // 初始化棋盘
-            initBoard();
-        }
-        
-        // 加入房间
-        function joinRoom() {
-            const roomId = roomInput.value.trim();
-            if (!roomId) {
-                statusBar.textContent = "请输入房间号";
-                return;
             }
-            
-            gameState.roomId = roomId;
-            gameState.playerRole = 'white';
-            
-            roomIdElement.textContent = roomId;
-            playerRoleElement.textContent = "白方";
-            
-            connectToWebSocket();
-            
-            statusBar.textContent = "正在加入房间...";
-            createRoomBtn.disabled = true;
-            joinRoomBtn.disabled = true;
-            roomInput.disabled = true;
-            
-            // 初始化棋盘
-            initBoard();
-            
-            // 发送加入房间请求
-            setTimeout(() => {
-                if (socket.readyState === WebSocket.OPEN) {
-                    sendJoinRoomMessage();
-                } else {
-                    socket.addEventListener('open', () => {
-                        sendJoinRoomMessage();
-                    });
-                }
-            }, 100);
         }
         
         // 事件监听
         createRoomBtn.addEventListener('click', createRoom);
         joinRoomBtn.addEventListener('click', joinRoom);
         
-        // 初始化
+        // 初始化棋盘
         initBoard();
+        
+        // 尝试恢复之前的游戏
+        restoreGameState();
+        
+        // 定时检查对方消息
+        setInterval(checkOpponentMove, 1000);
     </script>
 </body>
 </html>
