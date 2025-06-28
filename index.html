@@ -204,6 +204,16 @@
             line-height: 1.4;
         }
         
+        /* 隐藏半透明棋子 */
+        .grid-point {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            z-index: 4;
+            background: transparent;
+            cursor: pointer;
+        }
+        
         @media (max-width: 600px) {
             .goban {
                 width: 340px;
@@ -280,7 +290,7 @@
         const GRID_SIZE = 15; // 15x15 棋盘
         const CELL_SIZE = 40; // 棋盘格子大小
         const COLOR = ["black", "white"];
-        const DIRECTIONS = [[-1, -1], [0, -1], [1, -1], [1, 0]];
+        const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]; // 检查方向
         
         // 游戏状态
         let gameState = {
@@ -289,10 +299,11 @@
             currentTurn: 'black',
             gameStarted: false,
             gameOver: false,
-            boardState: Array(GRID_SIZE).fill().map(() => Array(GRID_SIZE).fill(null))
+            boardState: Array(GRID_SIZE).fill().map(() => Array(GRID_SIZE).fill(null)),
+            players: {}
         };
         
-        // 公共WebSocket服务器
+        // 使用更可靠的WebSocket服务器
         const WS_SERVER = "wss://ws.postman-echo.com/raw";
         let socket = null;
         
@@ -343,16 +354,15 @@
                 goban.appendChild(star);
             });
             
-            // 创建落子点
+            // 创建落子点 - 使用透明点击区域
             for (let y = 0; y < GRID_SIZE; y++) {
                 for (let x = 0; x < GRID_SIZE; x++) {
                     const gridPoint = document.createElement('div');
-                    gridPoint.style.position = 'absolute';
+                    gridPoint.classList.add("grid-point");
                     gridPoint.style.left = `${x * CELL_SIZE - 15}px`;
                     gridPoint.style.top = `${y * CELL_SIZE - 15}px`;
-                    gridPoint.id = `${x}-${y}`;
-                    gridPoint.classList.add("stone");
-                    gridPoint.setAttribute("data-col", "empty");
+                    gridPoint.dataset.x = x;
+                    gridPoint.dataset.y = y;
                     
                     gridPoint.addEventListener('click', () => {
                         if (gameState.gameOver) {
@@ -370,7 +380,7 @@
                             return;
                         }
                         
-                        if (gridPoint.getAttribute("data-col") !== "empty") {
+                        if (gameState.boardState[y][x] !== null) {
                             statusBar.textContent = "该位置已有棋子，请选择其他位置";
                             return;
                         }
@@ -402,9 +412,13 @@
         
         // 放置棋子
         function placeStone(x, y, color) {
-            const stone = document.getElementById(`${x}-${y}`);
-            stone.classList.add(`${color}-stone`);
-            stone.setAttribute("data-col", color);
+            const stone = document.createElement('div');
+            stone.classList.add('stone', `${color}-stone`);
+            stone.style.left = `${x * CELL_SIZE - 15}px`;
+            stone.style.top = `${y * CELL_SIZE - 15}px`;
+            stone.dataset.x = x;
+            stone.dataset.y = y;
+            goban.appendChild(stone);
         }
         
         // 更新棋盘状态
@@ -417,15 +431,7 @@
             const color = gameState.boardState[y][x];
             if (!color) return null;
             
-            // 检查方向：横向、纵向、两个对角线
-            const directions = [
-                [1, 0],  // 水平
-                [0, 1],  // 垂直
-                [1, 1],  // 右下对角线
-                [1, -1]  // 右上对角线
-            ];
-            
-            for (const [dx, dy] of directions) {
+            for (const [dx, dy] of DIRECTIONS) {
                 let count = 1; // 当前位置已经有一个棋子
                 
                 // 正向检查
@@ -474,11 +480,23 @@
                 connectionStatusElement.textContent = "已连接";
                 connectionStatusElement.style.color = "#4CAF50";
                 statusBar.textContent = "已连接到游戏服务器";
+                
+                // 加入房间
+                if (gameState.roomId) {
+                    const joinMsg = {
+                        type: 'join',
+                        roomId: gameState.roomId,
+                        playerRole: gameState.playerRole
+                    };
+                    socket.send(JSON.stringify(joinMsg));
+                }
             };
             
             socket.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
+                    
+                    // 只处理当前房间的消息
                     if (message.roomId !== gameState.roomId) return;
                     
                     switch (message.type) {
@@ -486,10 +504,19 @@
                             handleOpponentMove(message.x, message.y);
                             break;
                         case 'join':
-                            handlePlayerJoin(message.role);
+                            handlePlayerJoin(message.playerRole);
                             break;
                         case 'win':
                             handleWinMessage(message.winner);
+                            break;
+                        case 'room_created':
+                            handleRoomCreated(message.roomId);
+                            break;
+                        case 'player_joined':
+                            handlePlayerJoined(message.playerRole);
+                            break;
+                        case 'error':
+                            handleErrorMessage(message.message);
                             break;
                     }
                 } catch (e) {
@@ -511,6 +538,34 @@
             };
         }
         
+        // 处理房间创建成功
+        function handleRoomCreated(roomId) {
+            gameState.roomId = roomId;
+            roomIdElement.textContent = roomId;
+            statusBar.textContent = "房间已创建，请分享房间号给朋友";
+        }
+        
+        // 处理玩家加入成功
+        function handlePlayerJoined(playerRole) {
+            gameState.gameStarted = true;
+            playerRoleElement.textContent = playerRole === 'black' ? "黑方" : "白方";
+            
+            if (playerRole === 'black') {
+                gameState.currentTurn = 'black';
+                statusBar.textContent = "游戏开始！你是黑方，请先落子";
+            } else {
+                gameState.currentTurn = 'black';
+                statusBar.textContent = "游戏开始！你是白方，等待黑方落子";
+            }
+            
+            updateTurnIndicator();
+        }
+        
+        // 处理错误消息
+        function handleErrorMessage(msg) {
+            statusBar.textContent = msg;
+        }
+        
         // 处理对手落子
         function handleOpponentMove(x, y) {
             const opponentColor = gameState.playerRole === 'black' ? 'white' : 'black';
@@ -530,25 +585,6 @@
             }
         }
         
-        // 处理玩家加入
-        function handlePlayerJoin(role) {
-            if (!gameState.gameStarted) {
-                gameState.gameStarted = true;
-                gameState.playerRole = role;
-                playerRoleElement.textContent = role === 'black' ? "黑方" : "白方";
-                
-                if (role === 'black') {
-                    gameState.currentTurn = 'black';
-                    statusBar.textContent = "游戏开始！你是黑方，请先落子";
-                } else {
-                    gameState.currentTurn = 'black';
-                    statusBar.textContent = "游戏开始！你是白方，等待黑方落子";
-                }
-                
-                updateTurnIndicator();
-            }
-        }
-        
         // 处理胜利消息
         function handleWinMessage(winner) {
             gameState.gameOver = true;
@@ -564,7 +600,8 @@
                 type: 'move',
                 roomId: gameState.roomId,
                 x: x,
-                y: y
+                y: y,
+                playerRole: gameState.playerRole
             };
             
             socket.send(JSON.stringify(message));
@@ -583,14 +620,26 @@
             socket.send(JSON.stringify(message));
         }
         
-        // 发送加入消息
-        function sendJoinMessage() {
+        // 发送创建房间消息
+        function sendCreateRoomMessage() {
             if (!socket || socket.readyState !== WebSocket.OPEN) return;
             
             const message = {
-                type: 'join',
+                type: 'create_room',
+                playerRole: 'black'
+            };
+            
+            socket.send(JSON.stringify(message));
+        }
+        
+        // 发送加入房间消息
+        function sendJoinRoomMessage() {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return;
+            
+            const message = {
+                type: 'join_room',
                 roomId: gameState.roomId,
-                role: gameState.playerRole
+                playerRole: 'white'
             };
             
             socket.send(JSON.stringify(message));
@@ -609,16 +658,23 @@
         
         // 创建房间
         function createRoom() {
-            const roomId = Math.floor(1000 + Math.random() * 9000).toString();
-            gameState.roomId = roomId;
             gameState.playerRole = 'black';
-            
-            roomIdElement.textContent = roomId;
             playerRoleElement.textContent = "黑方";
             
             connectToWebSocket();
             
-            statusBar.textContent = "房间已创建，请分享房间号给朋友";
+            // 发送创建房间请求
+            setTimeout(() => {
+                if (socket.readyState === WebSocket.OPEN) {
+                    sendCreateRoomMessage();
+                } else {
+                    socket.addEventListener('open', () => {
+                        sendCreateRoomMessage();
+                    });
+                }
+            }, 100);
+            
+            statusBar.textContent = "正在创建房间...";
             createRoomBtn.disabled = true;
             joinRoomBtn.disabled = true;
             roomInput.disabled = true;
@@ -651,8 +707,16 @@
             // 初始化棋盘
             initBoard();
             
-            // 通知房间创建者
-            setTimeout(sendJoinMessage, 1000);
+            // 发送加入房间请求
+            setTimeout(() => {
+                if (socket.readyState === WebSocket.OPEN) {
+                    sendJoinRoomMessage();
+                } else {
+                    socket.addEventListener('open', () => {
+                        sendJoinRoomMessage();
+                    });
+                }
+            }, 100);
         }
         
         // 事件监听
